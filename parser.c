@@ -1,8 +1,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
-// C program for writing
-// struct to file
+// C program for writing dmverity data to the original image file
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
