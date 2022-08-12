@@ -11,24 +11,26 @@
 #define SHA2_256 0x1         // based on encoding assigned by dmverity
 #define MAX_DIGEST_SIZE 0x80
 #define TEMP_VERITY_FILE_HOST "verity.dat"             // temporary file on the host - we will write the verity data here
-#define TEMP_VERITY_FILE_DEVICE "verity_extracted.dat" // temporary file on the guest - we will write the verity data here
+#define TEMP_VERITY_FILE_DEVICE "verity_extracted.dat" // temporary file on the device - we will write the verity data here
 #define ROOTHASH_FILE "roothash.txt"
 #define TEMP_DEBUG_DIGEST_FILE "signature_copy.bin"
 #define DIGEST_FILE "signature.bin"
-#define IMAGE_NAME "ext4.img" // this should really be an input param
-// This structure keeps all the data that is needed for verification.
+#define IMAGE_NAME "ext4.img" // Name of the filesystem for which we want to apply verity
+
+// This structure keeps all the data that is needed for verification with "vertiysetup verify".
 // It might have some duplicate information from the verity super block but
 // that is ok since we do not have to parse the verity superblock now.
 // Most of the fields in the structure are returned by the dmverity format command
 typedef struct __attribute__((__packed__)) __attribute__((aligned(4096))) spdata
 {
-    unsigned int hash_size;                // this is the actual size of the hash. Max size is 512.
+    unsigned int hash_size;                // this is the "actual" size of the root hash. Max size is 512.
     unsigned char hash[MAX_HASH_SIZE];     /// This field stores the hash returned by the verityformat command
     unsigned long data_block_size;         // disk block size of the data area. This is likely to be 4K. This comes for the disk format
     unsigned long hash_block_size;         // disk block size of the hash area. This is likely to be 4K. This comes for the disk format
     unsigned long hash_start_block;        // This is really the start block of the verity superblock. We dont really use it now.
     unsigned int hash_algorithm;           // hash algorithm, returned by verity format
-    unsigned int digest_size;              // this is the size of the "signed hash." This is a separate process, please see genkey_sign.sh
+    unsigned int digest_size;              // this is the size of the "signed hash."
+                                           // Signing is a separate process, please see genkey_sign.sh
     unsigned char digest[MAX_DIGEST_SIZE]; // this is the "signed hash." This is a separate process, please see genkey_sign.sh
 
 } sphere_data;
@@ -41,11 +43,15 @@ void append_sphere_data_to_image();
 void extract_sphere_data_from_image();
 int main()
 {
+    // This function will put all the necessary data  in the data structure
     save_verity_format_data();
 #ifdef DEBUG
     debug_read_file();
 #endif
-    // append_sphere_data_to_image();
+    // This function will inject the data structure as a 4K block at the end of the image
+    append_sphere_data_to_image();
+
+    // This function should be run on a device, it will provide the fields needed veritysetup verify/create (including the digest)
     extract_sphere_data_from_image();
 }
 
@@ -195,8 +201,8 @@ void copy_digest_from_file(sphere_data *sd)
     outfile = fopen(TEMP_DEBUG_DIGEST_FILE, "wb");
     if ((infile == NULL) || (outfile == NULL))
     {
-        fprintf(stderr, "\nError opened file=%s\n",TEMP_DEBUG_DIGEST_FILE;
-        exit(1);
+        fprintf(stderr, "\nError opened file=%s\n", TEMP_DEBUG_DIGEST_FILE);
+        //   exit(1);
     }
     fwrite(sd->digest, 1, n, outfile);
     fclose(outfile);
@@ -213,6 +219,7 @@ void copy_digest_from_file(sphere_data *sd)
  * This function is expected to run on the host on each image that is dmverity verified
  */
 
+// TODO: We need to add a check to see if the image already contains a sphere header then this function should not anything.
 void append_sphere_data_to_image()
 {
     FILE *in_file = fopen(TEMP_VERITY_FILE_HOST, "rb");
@@ -233,12 +240,15 @@ void append_sphere_data_to_image()
 
     char *file_contents = malloc(sb.st_size);
     n = fread(file_contents, sb.st_size, 1, in_file);
-    printf("Read 0x%x bytes from %s and wrote to %s\n", n, TEMP_VERITY_FILE_HOST, IMAGE_NAME);
+    printf("INFO: Read 0x%x bytes from %s and wrote to %s\n", n, TEMP_VERITY_FILE_HOST, IMAGE_NAME);
     fwrite(file_contents, 1, sb.st_size, out_file);
 
+#ifdef DEBUG
     printf("read data: size=0x%lx \n", sb.st_size);
     for (int count = 0; count < sb.st_size; count++)
         printf("byte[%d]=0x%x \t", count, file_contents[count]);
+#endif
+
     fclose(in_file);
 
     free(file_contents);
