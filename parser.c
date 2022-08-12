@@ -4,12 +4,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
-#define MAX_HASH_SIZE 0x020  // 512 bits
-#define SHA2_256_SIZE 0x0100 //
-#define BLOCK_4K 0x1000      // Hardcoding here but this should be an input to the program
-#define SHA2_256 0x1         // based on encoding assigned by dmverity
-#define MAX_DIGEST_SIZE 0x80
+#define MAX_HASH_SIZE 0x020                            // 512 bits
+#define SHA2_256_SIZE 0x0100                           //
+#define BLOCK_4K 0x1000                                // Hardcoding here but this should be an input to the program
+#define SHA2_256 0x1                                   // based on encoding assigned by dmverity
+#define MAX_DIGEST_SIZE 3 * 1024                       // 3KB
 #define TEMP_VERITY_FILE_HOST "verity.dat"             // temporary file on the host - we will write the verity data here
 #define TEMP_VERITY_FILE_DEVICE "verity_extracted.dat" // temporary file on the device - we will write the verity data here
 #define ROOTHASH_FILE "roothash.txt"
@@ -23,15 +24,17 @@
 // Most of the fields in the structure are returned by the dmverity format command
 typedef struct __attribute__((__packed__)) __attribute__((aligned(4096))) spdata
 {
-    unsigned int hash_size;                // this is the "actual" size of the root hash. Max size is 512.
-    unsigned char hash[MAX_HASH_SIZE];     /// This field stores the hash returned by the verityformat command
+    uint64_t magic;                        // Should be set to "ASVERITY" or 0x5954495245565341
+    uint32_t root_hash_size;               // this is the "actual" size of the root hash. Max size is 512.
+    uint8_t root_hash[MAX_HASH_SIZE];      /// This field stores the hash returned by the verityformat command
     unsigned long data_block_size;         // disk block size of the data area. This is likely to be 4K. This comes for the disk format
     unsigned long hash_block_size;         // disk block size of the hash area. This is likely to be 4K. This comes for the disk format
     unsigned long hash_start_block;        // This is really the start block of the verity superblock. We dont really use it now.
     unsigned int hash_algorithm;           // hash algorithm, returned by verity format
-    unsigned int digest_size;              // this is the size of the "signed hash."
+    uint32_t digest_size;                  // this is the size of the "signed hash."
                                            // Signing is a separate process, please see genkey_sign.sh
-    unsigned char digest[MAX_DIGEST_SIZE]; // this is the "signed hash." This is a separate process, please see genkey_sign.sh
+    unsigned char digest[MAX_DIGEST_SIZE]; // this is the PKCS#7 signature of the root hash. This is a separate process, please see genkey_sign.sh.
+                                           // This is a separate process, please see genkey_sign.sh
 
 } sphere_data;
 
@@ -63,7 +66,7 @@ void save_verity_format_data()
 {
     FILE *outfile;
     sphere_data sd;
-    sd.hash_size = SHA2_256_SIZE;
+    sd.root_hash_size = SHA2_256_SIZE;
     int n = 0;
     // sd.hash_start_block = 100;
 
@@ -79,7 +82,8 @@ void save_verity_format_data()
     sd.data_block_size = BLOCK_4K;
     sd.hash_block_size = BLOCK_4K;
     sd.hash_algorithm = SHA2_256;
-    sd.hash_size = SHA2_256_SIZE;
+    sd.root_hash_size = SHA2_256_SIZE;
+    sd.magic = 0x5954495245565341; // asverity
 
     extract_roothash_from_file(&sd);
     copy_digest_from_file(&sd);
@@ -119,11 +123,11 @@ void debug_read_file()
     while (fread(&sd, sizeof(struct spdata), 1, infile))
         fwrite(sd.digest, 1, sd.digest_size, outfile);
 
-    printf("read: hash_size = 0%d\n ", sd.hash_size);
+    printf("read: hash_size = 0%d\n ", sd.root_hash_size);
     printf("read: hash =");
     printf("0x");
-    for (size_t count = 0; count < sd.hash_size; count++)
-        printf("%02x", sd.hash[count]);
+    for (size_t count = 0; count < sd.root_hash_size; count++)
+        printf("%02x", sd.root_hash[count]);
     printf("\n----\n");
     printf("\nread: data_block_size =0x%lx", sd.data_block_size);
     printf("\nread: hash_block_size =0x%lx", sd.hash_block_size);
@@ -145,7 +149,7 @@ void extract_roothash_from_file(sphere_data *sd)
     unsigned char *hash_string;
     int n = 0;
 
-    hash_string = malloc(2 * sd->hash_size);
+    hash_string = malloc(2 * sd->root_hash_size);
 
     // open file for reading
     infile = fopen(ROOTHASH_FILE, "r");
@@ -156,21 +160,21 @@ void extract_roothash_from_file(sphere_data *sd)
     }
 
     // read from file
-    n = fread(hash_string, 1, sd->hash_size * 2, infile);
+    n = fread(hash_string, 1, sd->root_hash_size * 2, infile);
 
     // Convert roothash from char to bytes
     char *hexstring;
     hexstring = hash_string;
-    for (size_t count = 0; count < sd->hash_size; count++)
+    for (size_t count = 0; count < sd->root_hash_size; count++)
     {
         // copy to struct
-        sscanf(hexstring, "%2hhx", &sd->hash[count]);
+        sscanf(hexstring, "%2hhx", &sd->root_hash[count]);
         hexstring += 2;
     }
 
     printf("INFO: Extracted root hash from roothash file=%s, nroothash=", ROOTHASH_FILE);
     // print the characters read
-    for (int count = 0; count < sd->hash_size * 2; count++)
+    for (int count = 0; count < sd->root_hash_size * 2; count++)
         printf("%c", hash_string[count]);
     printf("\n");
 
